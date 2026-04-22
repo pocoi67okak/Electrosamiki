@@ -1,5 +1,5 @@
 name: Electrosamiki
-version: 2.0.0
+version: 2.0.1
 main: ru.saita.electrosamiki.ElectrosamikiPlugin
 api-version: '1.21'
 author: saita

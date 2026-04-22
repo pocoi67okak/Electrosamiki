@@ -263,6 +263,8 @@ public final class ScooterManager {
             Player rider = findPlayerPassenger(stand);
             if (rider != null) {
                 moveScooter(stand, rider, getStoredSpeed(stand));
+            } else {
+                stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
             }
             updateVisuals(stand);
         }
@@ -282,10 +284,14 @@ public final class ScooterManager {
 
         Location next = findRideLocation(current, desired);
         if (next == null) {
+            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
             return;
         }
 
-        stand.teleport(next);
+        Vector velocity = next.toVector().subtract(current.toVector());
+        stand.setRotation(next.getYaw(), 0.0F);
+        stand.setFallDistance(0.0F);
+        stand.setVelocity(velocity);
     }
 
     private Location findRideLocation(Location current, Location desired) {
