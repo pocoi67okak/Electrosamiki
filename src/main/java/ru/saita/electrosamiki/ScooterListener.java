@@ -13,12 +13,12 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.entity.EntityDismountEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerToggleSneakEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -94,14 +94,13 @@ public final class ScooterListener implements Listener {
             return;
         }
 
-        if (!scooter.getPassengers().isEmpty()) {
+        if (scooterManager.isOccupied(scooter)) {
             player.sendMessage(ChatColor.RED + "Этот электросамокат уже занят.");
             return;
         }
 
         scooterManager.registerLoadedScooter(scooter);
-        scooterManager.resetSpeed(scooter);
-        scooter.addPassenger(player);
+        scooterManager.startRide(player, scooter);
         player.sendMessage(ChatColor.AQUA + "Вы сели на электросамокат. Кликайте мышью, чтобы менять скорость.");
     }
 
@@ -114,20 +113,15 @@ public final class ScooterListener implements Listener {
     }
 
     @EventHandler
-    public void onEntityDismount(EntityDismountEvent event) {
-        ArmorStand scooter = scooterManager.getScooterRoot(event.getDismounted());
-        if (scooter != null) {
-            scooterManager.resetSpeed(scooter);
+    public void onPlayerToggleSneak(PlayerToggleSneakEvent event) {
+        if (event.isSneaking() && scooterManager.isRidingScooter(event.getPlayer())) {
+            scooterManager.stopRide(event.getPlayer());
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        Entity vehicle = event.getPlayer().getVehicle();
-        ArmorStand scooter = scooterManager.getScooterRoot(vehicle);
-        if (scooter != null) {
-            scooter.removePassenger(event.getPlayer());
-        }
+        scooterManager.stopRide(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGH)

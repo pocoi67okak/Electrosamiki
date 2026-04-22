@@ -54,6 +54,8 @@ public final class ScooterManager {
     private final NamespacedKey scooterRootKey;
     private final Map<UUID, Integer> scooterSpeeds = new HashMap<>();
     private final Map<UUID, ScooterVisual> visuals = new HashMap<>();
+    private final Map<UUID, UUID> riderScooters = new HashMap<>();
+    private final Map<UUID, UUID> scooterRiders = new HashMap<>();
     private final Map<UUID, Long> lastSpeedClicks = new HashMap<>();
     private BukkitTask movementTask;
 
@@ -78,6 +80,8 @@ public final class ScooterManager {
         }
         removeAllVisuals();
         scooterSpeeds.clear();
+        riderScooters.clear();
+        scooterRiders.clear();
         lastSpeedClicks.clear();
     }
 
@@ -152,7 +156,7 @@ public final class ScooterManager {
     }
 
     public boolean isRidingScooter(Player player) {
-        return getScooterRoot(player.getVehicle()) != null;
+        return riderScooters.containsKey(player.getUniqueId());
     }
 
     public void registerLoadedEntities(Entity[] entities) {
@@ -186,9 +190,52 @@ public final class ScooterManager {
         setSpeed(stand, MIN_SPEED);
     }
 
+    public boolean isOccupied(ArmorStand stand) {
+        return scooterRiders.containsKey(stand.getUniqueId());
+    }
+
+    public void startRide(Player player, ArmorStand stand) {
+        stopRide(player);
+        UUID previousRiderId = scooterRiders.get(stand.getUniqueId());
+        if (previousRiderId != null) {
+            Player previousRider = Bukkit.getPlayer(previousRiderId);
+            if (previousRider != null) {
+                riderScooters.remove(previousRider.getUniqueId());
+            }
+        }
+
+        riderScooters.put(player.getUniqueId(), stand.getUniqueId());
+        scooterRiders.put(stand.getUniqueId(), player.getUniqueId());
+        resetSpeed(stand);
+        stand.eject();
+        player.setFallDistance(0.0F);
+        player.teleport(seatLocation(stand, player));
+    }
+
+    public void stopRide(Player player) {
+        UUID scooterId = riderScooters.remove(player.getUniqueId());
+        if (scooterId == null) {
+            return;
+        }
+
+        scooterRiders.remove(scooterId);
+        Entity entity = Bukkit.getEntity(scooterId);
+        if (entity instanceof ArmorStand stand && isScooter(stand)) {
+            resetSpeed(stand);
+            player.setFallDistance(0.0F);
+            player.teleport(exitLocation(stand, player));
+        }
+    }
+
     public void cycleSpeed(Player player) {
-        ArmorStand stand = getScooterRoot(player.getVehicle());
-        if (stand == null) {
+        UUID scooterId = riderScooters.get(player.getUniqueId());
+        if (scooterId == null) {
+            return;
+        }
+
+        Entity entity = Bukkit.getEntity(scooterId);
+        if (!(entity instanceof ArmorStand stand) || !isScooter(stand)) {
+            riderScooters.remove(player.getUniqueId());
             return;
         }
 
@@ -207,6 +254,15 @@ public final class ScooterManager {
 
     public void removeScooter(ArmorStand stand, boolean dropItem) {
         Location dropLocation = stand.getLocation();
+        UUID riderId = scooterRiders.remove(stand.getUniqueId());
+        if (riderId != null) {
+            riderScooters.remove(riderId);
+            Player rider = Bukkit.getPlayer(riderId);
+            if (rider != null) {
+                rider.setFallDistance(0.0F);
+                rider.teleport(exitLocation(stand, rider));
+            }
+        }
         stand.eject();
         removeVisuals(stand.getUniqueId());
         scooterSpeeds.remove(stand.getUniqueId());
@@ -260,7 +316,7 @@ public final class ScooterManager {
                 continue;
             }
 
-            Player rider = findPlayerPassenger(stand);
+            Player rider = findRider(stand);
             if (rider != null) {
                 moveScooter(stand, rider, getStoredSpeed(stand));
             } else {
@@ -284,14 +340,13 @@ public final class ScooterManager {
 
         Location next = findRideLocation(current, desired);
         if (next == null) {
-            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
             return;
         }
 
-        Vector velocity = next.toVector().subtract(current.toVector());
-        stand.setRotation(next.getYaw(), 0.0F);
+        stand.teleport(next);
         stand.setFallDistance(0.0F);
-        stand.setVelocity(velocity);
+        rider.setFallDistance(0.0F);
+        rider.teleport(seatLocation(stand, rider));
     }
 
     private Location findRideLocation(Location current, Location desired) {
@@ -315,13 +370,33 @@ public final class ScooterManager {
         return !location.clone().subtract(0.0D, 0.12D, 0.0D).getBlock().isPassable();
     }
 
-    private Player findPlayerPassenger(ArmorStand stand) {
-        for (Entity passenger : stand.getPassengers()) {
-            if (passenger instanceof Player player) {
-                return player;
-            }
+    private Player findRider(ArmorStand stand) {
+        UUID riderId = scooterRiders.get(stand.getUniqueId());
+        if (riderId == null) {
+            return null;
         }
-        return null;
+
+        Player rider = Bukkit.getPlayer(riderId);
+        if (rider == null || !rider.isOnline() || !rider.getWorld().equals(stand.getWorld())) {
+            scooterRiders.remove(stand.getUniqueId());
+            riderScooters.remove(riderId);
+            return null;
+        }
+        return rider;
+    }
+
+    private Location seatLocation(ArmorStand stand, Player rider) {
+        Location seat = stand.getLocation().clone().add(0.0D, 0.25D, 0.0D);
+        seat.setYaw(rider.getLocation().getYaw());
+        seat.setPitch(rider.getLocation().getPitch());
+        return seat;
+    }
+
+    private Location exitLocation(ArmorStand stand, Player rider) {
+        Location exit = stand.getLocation().clone().add(rotateOffset(stand.getLocation().getYaw(), 0.85D, 0.0D, 0.0D));
+        exit.setYaw(rider.getLocation().getYaw());
+        exit.setPitch(rider.getLocation().getPitch());
+        return exit;
     }
 
     private void ensureVisuals(ArmorStand stand) {
