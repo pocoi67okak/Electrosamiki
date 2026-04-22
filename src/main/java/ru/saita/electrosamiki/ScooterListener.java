@@ -4,20 +4,22 @@ import org.bukkit.ChatColor;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
+import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityDismountEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.event.vehicle.VehicleDestroyEvent;
-import org.bukkit.event.vehicle.VehicleExitEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 
@@ -57,13 +59,14 @@ public final class ScooterListener implements Listener {
         }
 
         Location spawnLocation = clickedBlock.getLocation().add(0.5D, 1.05D, 0.5D);
-        if (!spawnLocation.getBlock().isPassable()) {
+        spawnLocation.setYaw(player.getLocation().getYaw());
+        spawnLocation.setPitch(0.0F);
+        if (!spawnLocation.getBlock().isPassable() || !spawnLocation.clone().add(0.0D, 1.0D, 0.0D).getBlock().isPassable()) {
             player.sendMessage(ChatColor.RED + "Здесь недостаточно места для электросамоката.");
             return;
         }
 
-        Minecart cart = scooterManager.spawnScooter(spawnLocation);
-        cart.setRotation(player.getLocation().getYaw(), 0.0F);
+        scooterManager.spawnScooter(spawnLocation);
         consumeOneScooter(player);
         player.sendMessage(ChatColor.AQUA + "Электросамокат поставлен.");
     }
@@ -74,8 +77,8 @@ public final class ScooterListener implements Listener {
             return;
         }
 
-        Entity entity = event.getRightClicked();
-        if (!(entity instanceof Minecart cart) || !scooterManager.isScooter(cart)) {
+        ArmorStand scooter = scooterManager.getScooterRoot(event.getRightClicked());
+        if (scooter == null) {
             return;
         }
 
@@ -91,14 +94,14 @@ public final class ScooterListener implements Listener {
             return;
         }
 
-        if (!cart.getPassengers().isEmpty()) {
+        if (!scooter.getPassengers().isEmpty()) {
             player.sendMessage(ChatColor.RED + "Этот электросамокат уже занят.");
             return;
         }
 
-        scooterManager.registerLoadedScooter(cart);
-        scooterManager.resetSpeed(cart);
-        cart.addPassenger(player);
+        scooterManager.registerLoadedScooter(scooter);
+        scooterManager.resetSpeed(scooter);
+        scooter.addPassenger(player);
         player.sendMessage(ChatColor.AQUA + "Вы сели на электросамокат. Кликайте мышью, чтобы менять скорость.");
     }
 
@@ -111,30 +114,56 @@ public final class ScooterListener implements Listener {
     }
 
     @EventHandler
-    public void onVehicleExit(VehicleExitEvent event) {
-        if (event.getVehicle() instanceof Minecart cart && scooterManager.isScooter(cart)) {
-            scooterManager.resetSpeed(cart);
+    public void onEntityDismount(EntityDismountEvent event) {
+        ArmorStand scooter = scooterManager.getScooterRoot(event.getDismounted());
+        if (scooter != null) {
+            scooterManager.resetSpeed(scooter);
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         Entity vehicle = event.getPlayer().getVehicle();
-        if (vehicle != null && scooterManager.isScooter(vehicle)) {
-            vehicle.removePassenger(event.getPlayer());
+        ArmorStand scooter = scooterManager.getScooterRoot(vehicle);
+        if (scooter != null) {
+            scooter.removePassenger(event.getPlayer());
         }
     }
 
     @EventHandler(priority = EventPriority.HIGH)
-    public void onVehicleDestroy(VehicleDestroyEvent event) {
-        if (!(event.getVehicle() instanceof Minecart cart) || !scooterManager.isScooter(cart)) {
+    public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        ArmorStand scooter = scooterManager.getScooterRoot(event.getEntity());
+        if (scooter == null) {
             return;
         }
 
         event.setCancelled(true);
-        Location dropLocation = cart.getLocation();
-        cart.remove();
-        scooterManager.dropScooterItem(dropLocation);
+        if (!(event.getDamager() instanceof Player player)) {
+            return;
+        }
+
+        if (!player.hasPermission("electrosamiki.use")) {
+            player.sendMessage(ChatColor.RED + "Нет прав: electrosamiki.use");
+            return;
+        }
+
+        scooterManager.removeScooter(scooter, player.getGameMode() != GameMode.CREATIVE);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onEntityDamage(EntityDamageEvent event) {
+        if (event instanceof EntityDamageByEntityEvent) {
+            return;
+        }
+
+        if (scooterManager.getScooterRoot(event.getEntity()) != null) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onChunkLoad(ChunkLoadEvent event) {
+        scooterManager.registerLoadedEntities(event.getChunk().getEntities());
     }
 
     private void consumeOneScooter(Player player) {
