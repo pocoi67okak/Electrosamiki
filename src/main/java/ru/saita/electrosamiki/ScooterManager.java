@@ -30,11 +30,32 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 public final class ScooterManager {
-    public static final int MIN_SPEED = 3;
+    public static final int MIN_SPEED = 0;
     public static final int MAX_SPEED = 8;
 
     private static final long CLICK_COOLDOWN_MS = 250L;
     private static final double TICKS_PER_SECOND = 20.0D;
+    private static final int SPEED_STEP = 1;
+    private static final double ACCELERATION_PER_TICK = 0.24D;
+    private static final double BRAKE_PER_TICK = 0.42D;
+    private static final double OBSTACLE_BRAKE_PER_TICK = 1.0D;
+    private static final double IDLE_SPEED_EPSILON = 0.03D;
+    private static final double MAX_MOVE_STEP = 0.18D;
+    private static final float TURN_DEGREES_PER_TICK = 9.0F;
+    private static final double[][] SPACE_CHECK_OFFSETS = {
+            {0.0D, 0.0D},
+            {0.34D, 0.42D},
+            {-0.34D, 0.42D},
+            {0.34D, -0.42D},
+            {-0.34D, -0.42D},
+            {0.0D, 0.68D},
+            {0.0D, -0.68D}
+    };
+    private static final double[][] GROUND_CHECK_OFFSETS = {
+            {0.0D, 0.0D},
+            {0.0D, 0.58D},
+            {0.0D, -0.58D}
+    };
 
     private static final List<ModelPart> MODEL_PARTS = List.of(
             new ModelPart(Material.POLISHED_BLACKSTONE, 0.48F, 0.08F, 1.48F, 0.0D, 0.28D, 0.0D),
@@ -56,6 +77,7 @@ public final class ScooterManager {
     private final Map<UUID, ScooterVisual> visuals = new HashMap<>();
     private final Map<UUID, UUID> riderScooters = new HashMap<>();
     private final Map<UUID, UUID> scooterRiders = new HashMap<>();
+    private final Map<UUID, RideState> rideStates = new HashMap<>();
     private final Map<UUID, Long> lastSpeedClicks = new HashMap<>();
     private BukkitTask movementTask;
 
@@ -82,6 +104,7 @@ public final class ScooterManager {
         scooterSpeeds.clear();
         riderScooters.clear();
         scooterRiders.clear();
+        rideStates.clear();
         lastSpeedClicks.clear();
     }
 
@@ -96,7 +119,9 @@ public final class ScooterManager {
         meta.setLore(List.of(
                 ChatColor.GRAY + "ПКМ по блоку: поставить",
                 ChatColor.GRAY + "ПКМ по самокату: сесть",
-                ChatColor.GRAY + "Клик во время езды: сменить скорость"
+                ChatColor.GRAY + "ПКМ во время езды: газ",
+                ChatColor.GRAY + "ЛКМ во время езды: тормоз",
+                ChatColor.GRAY + "Shift: слезть"
         ));
         meta.getPersistentDataContainer().set(scooterItemKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
@@ -191,7 +216,7 @@ public final class ScooterManager {
     }
 
     public boolean isOccupied(ArmorStand stand) {
-        return scooterRiders.containsKey(stand.getUniqueId());
+        return scooterRiders.containsKey(stand.getUniqueId()) || !stand.getPassengers().isEmpty();
     }
 
     public void startRide(Player player, ArmorStand stand) {
@@ -200,16 +225,22 @@ public final class ScooterManager {
         if (previousRiderId != null) {
             Player previousRider = Bukkit.getPlayer(previousRiderId);
             if (previousRider != null) {
-                riderScooters.remove(previousRider.getUniqueId());
+                stopRide(previousRider);
+            } else {
+                riderScooters.remove(previousRiderId);
             }
         }
 
         riderScooters.put(player.getUniqueId(), stand.getUniqueId());
         scooterRiders.put(stand.getUniqueId(), player.getUniqueId());
+        rideStates.put(stand.getUniqueId(), new RideState(0.0D, MIN_SPEED, stand.getLocation().getYaw()));
         resetSpeed(stand);
         stand.eject();
         player.setFallDistance(0.0F);
-        player.teleport(seatLocation(stand, player));
+        if (!stand.addPassenger(player)) {
+            player.teleport(seatLocation(stand, player));
+            stand.addPassenger(player);
+        }
     }
 
     public void stopRide(Player player) {
@@ -219,15 +250,27 @@ public final class ScooterManager {
         }
 
         scooterRiders.remove(scooterId);
+        rideStates.remove(scooterId);
+        lastSpeedClicks.remove(player.getUniqueId());
         Entity entity = Bukkit.getEntity(scooterId);
         if (entity instanceof ArmorStand stand && isScooter(stand)) {
             resetSpeed(stand);
+            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+            stand.eject();
             player.setFallDistance(0.0F);
             player.teleport(exitLocation(stand, player));
         }
     }
 
-    public void cycleSpeed(Player player) {
+    public void increaseSpeed(Player player) {
+        adjustSpeed(player, SPEED_STEP);
+    }
+
+    public void decreaseSpeed(Player player) {
+        adjustSpeed(player, -SPEED_STEP);
+    }
+
+    private void adjustSpeed(Player player, int delta) {
         UUID scooterId = riderScooters.get(player.getUniqueId());
         if (scooterId == null) {
             return;
@@ -236,6 +279,9 @@ public final class ScooterManager {
         Entity entity = Bukkit.getEntity(scooterId);
         if (!(entity instanceof ArmorStand stand) || !isScooter(stand)) {
             riderScooters.remove(player.getUniqueId());
+            scooterRiders.remove(scooterId);
+            rideStates.remove(scooterId);
+            lastSpeedClicks.remove(player.getUniqueId());
             return;
         }
 
@@ -246,8 +292,15 @@ public final class ScooterManager {
         }
         lastSpeedClicks.put(player.getUniqueId(), now);
 
-        int speed = getStoredSpeed(stand);
-        int nextSpeed = speed >= MAX_SPEED ? MIN_SPEED : speed + 1;
+        RideState state = rideStates.computeIfAbsent(
+                stand.getUniqueId(),
+                id -> new RideState(0.0D, getStoredSpeed(stand), stand.getLocation().getYaw())
+        );
+        int nextSpeed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, state.targetSpeed + delta));
+        if (nextSpeed == state.targetSpeed) {
+            return;
+        }
+        state.targetSpeed = nextSpeed;
         setSpeed(stand, nextSpeed);
         player.sendMessage(ChatColor.AQUA + "Скорость электросамоката: " + nextSpeed + " блок/с.");
     }
@@ -257,13 +310,17 @@ public final class ScooterManager {
         UUID riderId = scooterRiders.remove(stand.getUniqueId());
         if (riderId != null) {
             riderScooters.remove(riderId);
+        }
+        rideStates.remove(stand.getUniqueId());
+        stand.eject();
+        stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+        if (riderId != null) {
             Player rider = Bukkit.getPlayer(riderId);
             if (rider != null) {
                 rider.setFallDistance(0.0F);
                 rider.teleport(exitLocation(stand, rider));
             }
         }
-        stand.eject();
         removeVisuals(stand.getUniqueId());
         scooterSpeeds.remove(stand.getUniqueId());
         stand.remove();
@@ -316,44 +373,93 @@ public final class ScooterManager {
                 continue;
             }
 
+            boolean refreshVisuals = !hasValidVisuals(stand);
             Player rider = findRider(stand);
             if (rider != null) {
-                moveScooter(stand, rider, getStoredSpeed(stand));
+                RideState state = rideStates.computeIfAbsent(
+                        stand.getUniqueId(),
+                        id -> new RideState(0.0D, getStoredSpeed(stand), stand.getLocation().getYaw())
+                );
+                refreshVisuals = moveScooter(stand, rider, state) || refreshVisuals;
             } else {
                 stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+                rideStates.remove(stand.getUniqueId());
+                if (getStoredSpeed(stand) != MIN_SPEED) {
+                    resetSpeed(stand);
+                }
             }
-            updateVisuals(stand);
+            if (refreshVisuals) {
+                updateVisuals(stand);
+            }
         }
     }
 
-    private void moveScooter(ArmorStand stand, Player rider, int speed) {
-        Vector direction = rider.getLocation().getDirection();
-        direction.setY(0.0D);
-        if (direction.lengthSquared() < 0.0001D) {
-            return;
+    private boolean moveScooter(ArmorStand stand, Player rider, RideState state) {
+        state.yaw = approachYaw(state.yaw, rider.getLocation().getYaw(), TURN_DEGREES_PER_TICK);
+        state.currentSpeed = approach(
+                state.currentSpeed,
+                state.targetSpeed,
+                state.targetSpeed > state.currentSpeed ? ACCELERATION_PER_TICK : BRAKE_PER_TICK
+        );
+        if (state.currentSpeed < IDLE_SPEED_EPSILON) {
+            state.currentSpeed = 0.0D;
         }
 
         Location current = stand.getLocation();
-        Location desired = current.clone().add(direction.normalize().multiply(speed / TICKS_PER_SECOND));
-        desired.setYaw(rider.getLocation().getYaw());
-        desired.setPitch(0.0F);
+        current.setYaw(state.yaw);
+        current.setPitch(0.0F);
 
-        Location next = findRideLocation(current, desired);
-        if (next == null) {
-            return;
+        if (state.currentSpeed <= 0.0D) {
+            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+            return rotateScooter(stand, current);
         }
 
+        Vector direction = forwardVector(state.yaw);
+        Location next = traceRideLocation(current, direction, state.currentSpeed / TICKS_PER_SECOND);
+
+        if (next == null) {
+            state.targetSpeed = MIN_SPEED;
+            state.currentSpeed = Math.max(0.0D, state.currentSpeed - OBSTACLE_BRAKE_PER_TICK);
+            setSpeed(stand, MIN_SPEED);
+            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+            return rotateScooter(stand, current);
+        }
+
+        next.setYaw(state.yaw);
+        next.setPitch(0.0F);
         stand.teleport(next);
         stand.setFallDistance(0.0F);
         rider.setFallDistance(0.0F);
-        rider.teleport(seatLocation(stand, rider));
+        return true;
+    }
+
+    private Location traceRideLocation(Location start, Vector direction, double distance) {
+        int steps = Math.max(1, (int) Math.ceil(distance / MAX_MOVE_STEP));
+        double stepDistance = distance / steps;
+        Location current = start.clone();
+        for (int i = 0; i < steps; i++) {
+            Location desired = current.clone().add(direction.clone().multiply(stepDistance));
+            desired.setYaw(start.getYaw());
+            desired.setPitch(0.0F);
+            Location next = findRideLocation(current, desired);
+            if (next == null) {
+                return i == 0 ? null : current;
+            }
+            current = next;
+        }
+        return current;
     }
 
     private Location findRideLocation(Location current, Location desired) {
-        double[] yOffsets = {0.0D, 0.5D, 1.0D, -0.5D, -1.0D};
+        double[] yOffsets = {0.0D, 0.25D, 0.5D, 0.75D, 1.0D, -0.25D, -0.5D, -0.75D, -1.0D};
         for (double yOffset : yOffsets) {
             Location candidate = desired.clone();
             candidate.setY(current.getY() + yOffset);
+            candidate.setYaw(desired.getYaw());
+            candidate.setPitch(0.0F);
+            if (!isLoaded(candidate)) {
+                return null;
+            }
             if (hasRideSpace(candidate) && hasGround(candidate)) {
                 return candidate;
             }
@@ -362,12 +468,72 @@ public final class ScooterManager {
     }
 
     private boolean hasRideSpace(Location location) {
-        return location.getBlock().isPassable()
-                && location.clone().add(0.0D, 1.0D, 0.0D).getBlock().isPassable();
+        for (double[] offset : SPACE_CHECK_OFFSETS) {
+            Location check = location.clone().add(rotateOffset(location.getYaw(), offset[0], 0.0D, offset[1]));
+            if (!check.getBlock().isPassable()
+                    || !check.clone().add(0.0D, 1.0D, 0.0D).getBlock().isPassable()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean hasGround(Location location) {
-        return !location.clone().subtract(0.0D, 0.12D, 0.0D).getBlock().isPassable();
+        for (double[] offset : GROUND_CHECK_OFFSETS) {
+            Location check = location.clone().add(rotateOffset(location.getYaw(), offset[0], -0.12D, offset[1]));
+            if (!check.getBlock().isPassable()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isLoaded(Location location) {
+        World world = location.getWorld();
+        return world != null && world.isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4);
+    }
+
+    private boolean rotateScooter(ArmorStand stand, Location rotated) {
+        if (Math.abs(wrapDegrees(rotated.getYaw() - stand.getLocation().getYaw())) > 0.1F) {
+            stand.teleport(rotated);
+            return true;
+        }
+        return false;
+    }
+
+    private Vector forwardVector(float yaw) {
+        double radians = Math.toRadians(yaw);
+        return new Vector(-Math.sin(radians), 0.0D, Math.cos(radians));
+    }
+
+    private double approach(double current, double target, double maxStep) {
+        if (current < target) {
+            return Math.min(target, current + maxStep);
+        }
+        return Math.max(target, current - maxStep);
+    }
+
+    private float approachYaw(float current, float target, float maxStep) {
+        float delta = wrapDegrees(target - current);
+        if (Math.abs(delta) <= maxStep) {
+            return normalizeYaw(target);
+        }
+        return normalizeYaw((float) (current + Math.copySign(maxStep, delta)));
+    }
+
+    private float normalizeYaw(float yaw) {
+        return wrapDegrees(yaw);
+    }
+
+    private float wrapDegrees(float angle) {
+        angle %= 360.0F;
+        if (angle >= 180.0F) {
+            angle -= 360.0F;
+        }
+        if (angle < -180.0F) {
+            angle += 360.0F;
+        }
+        return angle;
     }
 
     private Player findRider(ArmorStand stand) {
@@ -380,6 +546,13 @@ public final class ScooterManager {
         if (rider == null || !rider.isOnline() || !rider.getWorld().equals(stand.getWorld())) {
             scooterRiders.remove(stand.getUniqueId());
             riderScooters.remove(riderId);
+            rideStates.remove(stand.getUniqueId());
+            return null;
+        }
+        if (!stand.getPassengers().contains(rider)) {
+            scooterRiders.remove(stand.getUniqueId());
+            riderScooters.remove(riderId);
+            rideStates.remove(stand.getUniqueId());
             return null;
         }
         return rider;
@@ -397,6 +570,11 @@ public final class ScooterManager {
         exit.setYaw(rider.getLocation().getYaw());
         exit.setPitch(rider.getLocation().getPitch());
         return exit;
+    }
+
+    private boolean hasValidVisuals(ArmorStand stand) {
+        ScooterVisual visual = visuals.get(stand.getUniqueId());
+        return visual != null && visual.isValid();
     }
 
     private void ensureVisuals(ArmorStand stand) {
@@ -557,6 +735,18 @@ public final class ScooterManager {
 
     private void updateName(ArmorStand stand, int speed) {
         stand.setCustomName(ChatColor.AQUA + "Электросамокат " + ChatColor.GRAY + "[" + speed + " блок/с]");
+    }
+
+    private static final class RideState {
+        private double currentSpeed;
+        private int targetSpeed;
+        private float yaw;
+
+        private RideState(double currentSpeed, int targetSpeed, float yaw) {
+            this.currentSpeed = currentSpeed;
+            this.targetSpeed = targetSpeed;
+            this.yaw = yaw;
+        }
     }
 
     private record ModelPart(

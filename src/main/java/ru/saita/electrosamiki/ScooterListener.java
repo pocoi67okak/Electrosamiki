@@ -13,6 +13,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityDismountEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -39,7 +40,11 @@ public final class ScooterListener implements Listener {
         Player player = event.getPlayer();
         if (scooterManager.isRidingScooter(player)) {
             event.setCancelled(true);
-            scooterManager.cycleSpeed(player);
+            if (event.getAction() == Action.RIGHT_CLICK_AIR || event.getAction() == Action.RIGHT_CLICK_BLOCK) {
+                scooterManager.increaseSpeed(player);
+            } else if (event.getAction() == Action.LEFT_CLICK_AIR || event.getAction() == Action.LEFT_CLICK_BLOCK) {
+                scooterManager.decreaseSpeed(player);
+            }
             return;
         }
 
@@ -101,14 +106,14 @@ public final class ScooterListener implements Listener {
 
         scooterManager.registerLoadedScooter(scooter);
         scooterManager.startRide(player, scooter);
-        player.sendMessage(ChatColor.AQUA + "Вы сели на электросамокат. Кликайте мышью, чтобы менять скорость.");
+        player.sendMessage(ChatColor.AQUA + "Вы сели на электросамокат. ПКМ - газ, ЛКМ - тормоз, Shift - слезть.");
     }
 
     @EventHandler
     public void onPlayerAnimation(PlayerAnimationEvent event) {
         if (event.getAnimationType() == PlayerAnimationType.ARM_SWING
                 && scooterManager.isRidingScooter(event.getPlayer())) {
-            scooterManager.cycleSpeed(event.getPlayer());
+            scooterManager.decreaseSpeed(event.getPlayer());
         }
     }
 
@@ -116,6 +121,15 @@ public final class ScooterListener implements Listener {
     public void onPlayerToggleSneak(PlayerToggleSneakEvent event) {
         if (event.isSneaking() && scooterManager.isRidingScooter(event.getPlayer())) {
             scooterManager.stopRide(event.getPlayer());
+        }
+    }
+
+    @EventHandler
+    public void onEntityDismount(EntityDismountEvent event) {
+        if (event.getEntity() instanceof Player player
+                && scooterManager.isRidingScooter(player)
+                && scooterManager.getScooterRoot(event.getDismounted()) != null) {
+            scooterManager.stopRide(player);
         }
     }
 
@@ -133,6 +147,11 @@ public final class ScooterListener implements Listener {
 
         event.setCancelled(true);
         if (!(event.getDamager() instanceof Player player)) {
+            return;
+        }
+
+        if (scooterManager.isRidingScooter(player)) {
+            scooterManager.decreaseSpeed(player);
             return;
         }
 

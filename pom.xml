@@ -6,11 +6,11 @@
 
     <groupId>ru.saita</groupId>
     <artifactId>electrosamiki</artifactId>
-    <version>2.0.2</version>
+    <version>2.0.3</version>
     <packaging>jar</packaging>
 
     <name>Electrosamiki</name>
-    <description>Spigot plugin that adds rideable electric scooters.</description>
+    <description>Spigot plugin that adds rideable electric scooters with smooth throttle controls.</description>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
