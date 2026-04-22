@@ -1,0 +1,23 @@
+name: Electrosamiki
+version: 1.0.0
+main: ru.saita.electrosamiki.ElectrosamikiPlugin
+api-version: '1.21'
+author: saita
+description: Rideable electric scooters with cycling speed.
+
+commands:
+  electrosamik:
+    description: Manage electric scooters.
+    usage: /electrosamik give <player>
+    permission: electrosamiki.command
+
+permissions:
+  electrosamiki.command:
+    description: Allows using the base /electrosamik command.
+    default: true
+  electrosamiki.give:
+    description: Allows giving electric scooters to players.
+    default: op
+  electrosamiki.use:
+    description: Allows placing and riding electric scooters.
+    default: true
