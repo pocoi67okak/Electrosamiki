@@ -565,10 +565,7 @@ public final class ScooterManager {
             return null;
         }
         if (!stand.getPassengers().contains(rider)) {
-            scooterRiders.remove(stand.getUniqueId());
-            riderScooters.remove(riderId);
-            rideStates.remove(stand.getUniqueId());
-            return null;
+            stand.addPassenger(rider);
         }
         return rider;
     }
