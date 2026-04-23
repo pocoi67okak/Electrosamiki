@@ -4,8 +4,6 @@ import org.bukkit.ChatColor;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
-import org.bukkit.entity.ArmorStand;
-import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -133,11 +131,9 @@ public final class ScooterListener implements Listener {
     @EventHandler
     public void onEntityDismount(EntityDismountEvent event) {
         if (event.getEntity() instanceof Player player
-                && scooterManager.isRidingScooter(player)) {
-            ArmorStand scooter = scooterManager.getScooterRoot(event.getDismounted());
-            if (scooter != null && !scooterManager.isActivelyMoving(scooter)) {
-                scooterManager.stopRide(player);
-            }
+                && scooterManager.isRidingScooter(player)
+                && scooterManager.getScooterRoot(event.getDismounted()) != null) {
+            scooterManager.stopRide(player);
         }
     }
 
