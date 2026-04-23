@@ -2,9 +2,11 @@ package ru.saita.electrosamiki;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -79,6 +81,7 @@ public final class ScooterManager {
     private final Map<UUID, UUID> scooterRiders = new HashMap<>();
     private final Map<UUID, RideState> rideStates = new HashMap<>();
     private final Map<UUID, Long> lastSpeedClicks = new HashMap<>();
+    private final Set<UUID> activelyMoving = new HashSet<>();
     private BukkitTask movementTask;
 
     public ScooterManager(Plugin plugin) {
@@ -182,6 +185,10 @@ public final class ScooterManager {
 
     public boolean isRidingScooter(Player player) {
         return riderScooters.containsKey(player.getUniqueId());
+    }
+
+    public boolean isActivelyMoving(ArmorStand stand) {
+        return activelyMoving.contains(stand.getUniqueId());
     }
 
     public void registerLoadedEntities(Entity[] entities) {
@@ -395,42 +402,50 @@ public final class ScooterManager {
     }
 
     private boolean moveScooter(ArmorStand stand, Player rider, RideState state) {
-        state.yaw = approachYaw(state.yaw, rider.getLocation().getYaw(), TURN_DEGREES_PER_TICK);
-        state.currentSpeed = approach(
-                state.currentSpeed,
-                state.targetSpeed,
-                state.targetSpeed > state.currentSpeed ? ACCELERATION_PER_TICK : BRAKE_PER_TICK
-        );
-        if (state.currentSpeed < IDLE_SPEED_EPSILON) {
-            state.currentSpeed = 0.0D;
+        activelyMoving.add(stand.getUniqueId());
+        try {
+            state.yaw = approachYaw(state.yaw, rider.getLocation().getYaw(), TURN_DEGREES_PER_TICK);
+            state.currentSpeed = approach(
+                    state.currentSpeed,
+                    state.targetSpeed,
+                    state.targetSpeed > state.currentSpeed ? ACCELERATION_PER_TICK : BRAKE_PER_TICK
+            );
+            if (state.currentSpeed < IDLE_SPEED_EPSILON) {
+                state.currentSpeed = 0.0D;
+            }
+
+            Location current = stand.getLocation();
+            current.setYaw(state.yaw);
+            current.setPitch(0.0F);
+
+            if (state.currentSpeed <= 0.0D) {
+                stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+                return rotateScooter(stand, current);
+            }
+
+            Vector direction = forwardVector(state.yaw);
+            Location next = traceRideLocation(current, direction, state.currentSpeed / TICKS_PER_SECOND);
+
+            if (next == null) {
+                state.targetSpeed = MIN_SPEED;
+                state.currentSpeed = Math.max(0.0D, state.currentSpeed - OBSTACLE_BRAKE_PER_TICK);
+                setSpeed(stand, MIN_SPEED);
+                stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
+                return rotateScooter(stand, current);
+            }
+
+            next.setYaw(state.yaw);
+            next.setPitch(0.0F);
+            stand.teleport(next);
+            stand.setFallDistance(0.0F);
+            rider.setFallDistance(0.0F);
+            return true;
+        } finally {
+            activelyMoving.remove(stand.getUniqueId());
+            if (!stand.getPassengers().contains(rider)) {
+                stand.addPassenger(rider);
+            }
         }
-
-        Location current = stand.getLocation();
-        current.setYaw(state.yaw);
-        current.setPitch(0.0F);
-
-        if (state.currentSpeed <= 0.0D) {
-            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
-            return rotateScooter(stand, current);
-        }
-
-        Vector direction = forwardVector(state.yaw);
-        Location next = traceRideLocation(current, direction, state.currentSpeed / TICKS_PER_SECOND);
-
-        if (next == null) {
-            state.targetSpeed = MIN_SPEED;
-            state.currentSpeed = Math.max(0.0D, state.currentSpeed - OBSTACLE_BRAKE_PER_TICK);
-            setSpeed(stand, MIN_SPEED);
-            stand.setVelocity(new Vector(0.0D, 0.0D, 0.0D));
-            return rotateScooter(stand, current);
-        }
-
-        next.setYaw(state.yaw);
-        next.setPitch(0.0F);
-        stand.teleport(next);
-        stand.setFallDistance(0.0F);
-        rider.setFallDistance(0.0F);
-        return true;
     }
 
     private Location traceRideLocation(Location start, Vector direction, double distance) {

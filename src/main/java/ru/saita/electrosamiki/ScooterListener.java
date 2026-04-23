@@ -133,9 +133,11 @@ public final class ScooterListener implements Listener {
     @EventHandler
     public void onEntityDismount(EntityDismountEvent event) {
         if (event.getEntity() instanceof Player player
-                && scooterManager.isRidingScooter(player)
-                && scooterManager.getScooterRoot(event.getDismounted()) != null) {
-            scooterManager.stopRide(player);
+                && scooterManager.isRidingScooter(player)) {
+            ArmorStand scooter = scooterManager.getScooterRoot(event.getDismounted());
+            if (scooter != null && !scooterManager.isActivelyMoving(scooter)) {
+                scooterManager.stopRide(player);
+            }
         }
     }
 
