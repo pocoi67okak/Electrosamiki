@@ -89,6 +89,12 @@ public final class ScooterListener implements Listener {
 
         event.setCancelled(true);
         Player player = event.getPlayer();
+
+        if (scooterManager.isRidingScooter(player)) {
+            scooterManager.increaseSpeed(player);
+            return;
+        }
+
         if (!player.hasPermission("electrosamiki.use")) {
             player.sendMessage(ChatColor.RED + "Нет прав: electrosamiki.use");
             return;
